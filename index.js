@@ -1,10 +1,11 @@
+require("dotenv").config();
 const express = require("express");
 const morgan = require("morgan");
-const cors = require("cors");
+const Person = require("./models/person");
+
 const app = express();
 app.use(express.json());
 app.use(morgan("tiny"));
-app.use(cors());
 app.use(express.static("dist"));
 
 let phonebook = [
@@ -36,24 +37,20 @@ app.get("/", (req, res) => {
 
 app.get("/info", (req, res) => {
   const now = new Date();
-  res.send(
-    `<p>Phonebook has info for ${
-      phonebook.length
-    } people</p><p>${now.toString()}</p>`
-  );
+  Person.countDocuments({}).then((count) => {
+    res.send(
+      `<p>Phonebook has info for ${count} people</p><p>${now.toString()}</p>`
+    );
+  });
 });
 
 app.get("/api/persons", (req, res) => {
-  res.json(phonebook);
+  Person.find({}).then((p) => {
+    res.json(p);
+  });
 });
 
-const generateId = () => {
-  const maxId =
-    phonebook.length > 0 ? Math.max(...phonebook.map((p) => Number(p.id))) : 0;
-  return String(maxId + 1);
-};
-
-app.post("/api/persons", (req, res) => {
+app.post("/api/persons", (req, res, next) => {
   const body = req.body;
 
   if (!body.name || !body.number) {
@@ -64,31 +61,71 @@ app.post("/api/persons", (req, res) => {
     return res.status(400).json({ error: "name must be unique" });
   }
 
-  const person = {
-    id: generateId(),
+  const person = new Person({
     name: body.name,
     number: body.number,
-  };
+  });
 
-  phonebook = phonebook.concat(person);
-  res.json(person);
+  person
+    .save()
+    .then((savedPerson) => {
+      res.json(savedPerson);
+    })
+    .catch((error) => next(error));
 });
 
-app.get("/api/persons/:id", (req, res) => {
-  const id = req.params.id;
-  const person = phonebook.find((person) => person.id === id);
-  if (person) {
-    res.json(person);
-  } else {
-    res.status(404).end();
+app.get("/api/persons/:id", (req, res, next) => {
+  Person.findById(req.params.id)
+    .then((person) => {
+      if (person) {
+        res.json(person);
+      } else {
+        res.status(404).end();
+      }
+    })
+    .catch((error) => next(error));
+});
+
+app.put("/api/persons/:id", (req, res, next) => {
+  const { name, number } = req.body;
+  Person.findById(req.params.id)
+    .then((p) => {
+      if (!p) {
+        return res.status(404).end();
+      }
+      p.name = name;
+      p.number = number;
+      return p.save().then((updatedPerson) => {
+        res.json(updatedPerson);
+      });
+    })
+    .catch((error) => next(error));
+});
+
+app.delete("/api/persons/:id", (req, res, next) => {
+  Person.findByIdAndDelete(req.params.id)
+    .then((result) => {
+      res.status(204).end();
+    })
+    .catch((error) => next(error));
+});
+
+const unknownEndpoint = (request, response) => {
+  response.status(404).send({ error: "unknown endpoint" });
+};
+app.use(unknownEndpoint);
+
+const errorHandler = (error, request, response, next) => {
+  console.error(error.message);
+  if (error.name === "CastError") {
+    return response.status(400).send({ error: "malformatted id" });
+  } else if (error.name === "ValidationError") {
+    return res.status(400).json({ error: error.message });
   }
-});
-
-app.delete("/api/persons/:id", (req, res) => {
-  const id = req.params.id;
-  phonebook = phonebook.filter((person) => person.id !== id);
-  res.status(204).end();
-});
+  next(error);
+};
+// this has to be the last loaded middleware, also all the routes should be registered before this!
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
